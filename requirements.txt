@@ -1,0 +1,7 @@
+pymongo>=4.0
+pandas>=2.0
+tqdm>=4.0
+matplotlib>=3.0
+jupyter>=1.0
+selenium>=4.0
+requests>=2.28
