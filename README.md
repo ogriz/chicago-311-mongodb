@@ -93,11 +93,11 @@ Svaki član tima je napisao 5 upita iz perspektive određene uloge:
 
 | # | Upit | Ključna tehnika |
 |---|------|-----------------|
-| Q6 | Health score po community area | `$cond`, weighted scoring |
-| Q7 | Urban blight analiza | `$facet` (3 grane), `$map`+`$filter` |
-| Q8 | Trend glodara — YoY rast | `$range`, `$map`, `$arrayElemAt` |
-| Q9 | Response inequality index | `$facet`, ručni join |
-| Q10 | Risk map — kompozitni skor | `$facet` (4 grane), `$setUnion` |
+| Q6 | Glodari po community area | `$lookup`, `$group`, `$ifNull` |
+| Q7 | Napuštena vozila (30+ dana) | `$lookup`, `$match`, `$group` |
+| Q8 | Sezonski obrazac glodara | Dupli `$group`, `$avg`/`$min`/`$max` |
+| Q9 | Neresolvane sanitarne žalbe | `$group`, `$cond`, `$addFields` |
+| Q10 | Opasne zgrade po community area | `$group`, 3× `$cond` |
 
 ## Rezultati optimizacije
 
