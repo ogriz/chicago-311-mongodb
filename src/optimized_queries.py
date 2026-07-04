@@ -6,55 +6,82 @@ Koriste kolekciju 'requests_optimized'.
 COLLECTION = "requests_optimized"
 
 
-def query_1_infrastructure_correlation():
+def query_1_resolution_by_type_area():
     """
-    Pitanje 1 (Marko): Korelacija rupa na putu i ugasenih svetala po ward-u.
+    Pitanje 1 (Marko): Vreme resavanja po tipu prijave i gradskoj oblasti - embedded.
     """
     return [
         {"$match": {
-            "details.sub_type": {"$in": ["pothole", "street_light_all", "street_light_one"]}
+            "creation_date": {"$ne": None},
+            "completion_date": {"$ne": None},
+            "location.community_area": {"$ne": None}
         }},
         {"$addFields": {
             "resolution_days": {
-                "$cond": {
-                    "if": {"$and": [
-                        {"$ne": ["$completion_date", None]},
-                        {"$ne": ["$creation_date", None]}
-                    ]},
-                    "then": {"$divide": [
-                        {"$subtract": ["$completion_date", "$creation_date"]},
-                        86400000
-                    ]},
-                    "else": None
-                }
+                "$divide": [
+                    {"$subtract": ["$completion_date", "$creation_date"]},
+                    86400000
+                ]
             }
         }},
         {"$group": {
             "_id": {
-                "ward": "$location.ward",
-                "type": "$details.sub_type"
+                "request_type": "$request_type",
+                "community_area": "$location.community_area"
             },
-            "count": {"$sum": 1},
-            "avg_resolution_days": {"$avg": "$resolution_days"}
+            "sum_days": {"$sum": "$resolution_days"},
+            "count": {"$sum": 1}
+        }},
+        {"$match": {"count": {"$gte": 10}}},
+        {"$addFields": {
+            "area_avg_days": {"$divide": ["$sum_days", "$count"]}
         }},
         {"$group": {
-            "_id": "$_id.ward",
-            "types": {
+            "_id": "$_id.request_type",
+            "total_days": {"$sum": "$sum_days"},
+            "total_count": {"$sum": "$count"},
+            "num_areas": {"$sum": 1},
+            "areas": {
                 "$push": {
-                    "type": "$_id.type",
-                    "count": "$count",
-                    "avg_resolution_days": "$avg_resolution_days"
+                    "community_area": "$_id.community_area",
+                    "avg_days": "$area_avg_days"
                 }
-            },
-            "total_count": {"$sum": "$count"}
+            }
         }},
-        {"$sort": {"total_count": -1}},
-        {"$limit": 10},
+        {"$addFields": {
+            "overall_avg_days": {"$divide": ["$total_days", "$total_count"]},
+            "worst_area_avg": {"$max": "$areas.avg_days"},
+            "best_area_avg": {"$min": "$areas.avg_days"}
+        }},
+        {"$addFields": {
+            "area_spread_days": {"$subtract": ["$worst_area_avg", "$best_area_avg"]},
+            "worst_area": {"$arrayElemAt": [
+                {"$filter": {
+                    "input": "$areas",
+                    "as": "a",
+                    "cond": {"$eq": ["$$a.avg_days", "$worst_area_avg"]}
+                }}, 0
+            ]},
+            "best_area": {"$arrayElemAt": [
+                {"$filter": {
+                    "input": "$areas",
+                    "as": "a",
+                    "cond": {"$eq": ["$$a.avg_days", "$best_area_avg"]}
+                }}, 0
+            ]}
+        }},
+        {"$sort": {"overall_avg_days": -1}},
         {"$project": {
             "_id": 0,
-            "ward": "$_id",
-            "total_infrastructure_problems": "$total_count",
-            "breakdown": "$types"
+            "request_type": "$_id",
+            "overall_avg_days": {"$round": ["$overall_avg_days", 2]},
+            "total_count": 1,
+            "num_areas": 1,
+            "worst_community_area": "$worst_area.community_area",
+            "worst_area_avg_days": {"$round": ["$worst_area_avg", 2]},
+            "best_community_area": "$best_area.community_area",
+            "best_area_avg_days": {"$round": ["$best_area_avg", 2]},
+            "area_spread_days": {"$round": ["$area_spread_days", 2]}
         }}
     ]
 
@@ -143,59 +170,79 @@ def query_2_neglected_areas():
     ]
 
 
-def query_3_seasonal_patterns():
+def query_3_hotspot_locations():
     """
-    Pitanje 3 (Marko): Sezonski obrasci za rupe i grafite po ward-u.
+    Pitanje 3 (Marko): Hotspot lokacije - adrese sa konstantno velikim brojem
+    prijava i dominantnim tipom problema - embedded.
     """
     return [
         {"$match": {
-            "details.sub_type": {"$in": ["pothole", "graffiti"]},
-            "creation_date": {"$ne": None}
+            "creation_date": {"$ne": None},
+            "location.street_address": {"$ne": None}
         }},
+        {"$addFields": {"year": {"$year": "$creation_date"}}},
         {"$group": {
             "_id": {
-                "ward": "$location.ward",
-                "type": "$details.sub_type",
-                "month": {"$month": "$creation_date"}
+                "address": "$location.street_address",
+                "request_type": "$request_type"
             },
-            "count": {"$sum": 1}
+            "type_count": {"$sum": 1},
+            "type_years": {"$addToSet": "$year"},
+            "ward": {"$first": "$location.ward"},
+            "community_area": {"$first": "$location.community_area"}
         }},
-        {"$sort": {"count": -1}},
         {"$group": {
-            "_id": {"ward": "$_id.ward", "type": "$_id.type"},
-            "max_month": {"$first": "$_id.month"},
-            "max_count": {"$first": "$count"},
-            "min_count": {"$last": "$count"},
-            "monthly_counts": {
-                "$push": {"month": "$_id.month", "count": "$count"}
-            }
+            "_id": "$_id.address",
+            "total_requests": {"$sum": "$type_count"},
+            "types": {
+                "$push": {"type": "$_id.request_type", "count": "$type_count"}
+            },
+            "year_arrays": {"$push": "$type_years"},
+            "ward": {"$first": "$ward"},
+            "community_area": {"$first": "$community_area"}
         }},
         {"$addFields": {
-            "seasonal_index": {
-                "$cond": {
-                    "if": {"$gt": ["$min_count", 0]},
-                    "then": {"$round": [{"$divide": ["$max_count", "$min_count"]}, 2]},
-                    "else": None
-                }
-            }
+            "distinct_years": {"$size": {"$reduce": {
+                "input": "$year_arrays",
+                "initialValue": [],
+                "in": {"$setUnion": ["$$value", "$$this"]}
+            }}},
+            "num_distinct_types": {"$size": "$types"},
+            "max_type_count": {"$max": "$types.count"}
         }},
-        {"$group": {
-            "_id": "$_id.ward",
-            "patterns": {
-                "$push": {
-                    "type": "$_id.type",
-                    "peak_month": "$max_month",
-                    "peak_count": "$max_count",
-                    "seasonal_index": "$seasonal_index"
-                }
-            }
+        {"$match": {
+            "total_requests": {"$gte": 20},
+            "distinct_years": {"$gte": 3}
         }},
-        {"$sort": {"_id": 1}},
+        {"$addFields": {
+            "dominant": {"$arrayElemAt": [
+                {"$filter": {
+                    "input": "$types",
+                    "as": "t",
+                    "cond": {"$eq": ["$$t.count", "$max_type_count"]}
+                }}, 0
+            ]}
+        }},
+        {"$addFields": {
+            "dominant_share_pct": {"$round": [
+                {"$multiply": [
+                    {"$divide": ["$dominant.count", "$total_requests"]}, 100
+                ]}, 1
+            ]}
+        }},
+        {"$sort": {"total_requests": -1}},
         {"$limit": 20},
         {"$project": {
             "_id": 0,
-            "ward": "$_id",
-            "patterns": 1
+            "street_address": "$_id",
+            "community_area": 1,
+            "ward": 1,
+            "total_requests": 1,
+            "distinct_years": 1,
+            "num_distinct_types": 1,
+            "dominant_type": "$dominant.type",
+            "dominant_count": "$dominant.count",
+            "dominant_share_pct": 1
         }}
     ]
 
@@ -251,74 +298,44 @@ def query_4_problem_blocks():
     ]
 
 
-def query_5_district_efficiency():
+def query_5_top_types_per_area():
     """
-    Pitanje 5 (Marko): Efikasnost resavanja po policijskom distriktu i kategoriji.
+    Pitanje 5 (Marko): Najcesci tip prijave po gradskoj oblasti i njegov
+    procenat u ukupnom broju prijava te oblasti - embedded.
     """
     return [
-        {"$match": {
-            "creation_date": {"$ne": None},
-            "completion_date": {"$ne": None}
-        }},
-        {"$addFields": {
-            "resolution_days": {
-                "$divide": [
-                    {"$subtract": ["$completion_date", "$creation_date"]},
-                    86400000
-                ]
-            },
-            "category": {
-                "$switch": {
-                    "branches": [
-                        {"case": {"$in": ["$details.sub_type", [
-                            "pothole", "street_light_all", "street_light_one",
-                            "alley_light", "graffiti", "tree_debris", "tree_trim"
-                        ]]}, "then": "infrastruktura"},
-                        {"case": {"$in": ["$details.sub_type", [
-                            "rodent_baiting", "sanitation_code", "garbage_cart"
-                        ]]}, "then": "sanitacija"},
-                        {"case": {"$in": ["$request_type", [
-                            "Abandoned Vehicle Complaint"
-                        ]]}, "then": "vozila"},
-                        {"case": {"$in": ["$request_type", [
-                            "Vacant/Abandoned Building"
-                        ]]}, "then": "zgrade"},
-                    ],
-                    "default": "ostalo"
-                }
-            }
-        }},
-        {"$match": {"category": {"$ne": "ostalo"}}},
+        {"$match": {"location.community_area": {"$ne": None}}},
         {"$group": {
             "_id": {
-                "district": "$location.police_district",
-                "category": "$category"
+                "community_area": "$location.community_area",
+                "request_type": "$request_type"
             },
-            "avg_days": {"$avg": "$resolution_days"},
-            "count": {"$sum": 1}
+            "type_count": {"$sum": 1}
         }},
+        {"$sort": {"type_count": -1}},
         {"$group": {
-            "_id": "$_id.district",
-            "categories": {
-                "$push": {
-                    "category": "$_id.category",
-                    "avg_days": {"$round": ["$avg_days", 2]},
-                    "count": "$count"
-                }
-            },
-            "max_avg": {"$max": "$avg_days"},
-            "min_avg": {"$min": "$avg_days"}
+            "_id": "$_id.community_area",
+            "total_requests": {"$sum": "$type_count"},
+            "top_type": {"$first": "$_id.request_type"},
+            "top_type_count": {"$first": "$type_count"},
+            "num_types": {"$sum": 1}
         }},
         {"$addFields": {
-            "response_gap_days": {"$round": [{"$subtract": ["$max_avg", "$min_avg"]}, 2]}
+            "top_type_pct": {"$round": [
+                {"$multiply": [
+                    {"$divide": ["$top_type_count", "$total_requests"]}, 100
+                ]}, 1
+            ]}
         }},
-        {"$sort": {"response_gap_days": -1}},
-        {"$limit": 15},
+        {"$sort": {"_id": 1}},
         {"$project": {
             "_id": 0,
-            "police_district": "$_id",
-            "categories": 1,
-            "response_gap_days": 1
+            "community_area": "$_id",
+            "top_request_type": "$top_type",
+            "top_type_count": 1,
+            "total_requests": 1,
+            "top_type_pct": 1,
+            "num_types": 1
         }}
     ]
 
@@ -478,11 +495,11 @@ def query_10_dangerous_buildings():
 
 
 QUERIES = {
-    "Q1 - Infrastrukturna korelacija po ward-u": query_1_infrastructure_correlation,
+    "Q1 - Vreme resavanja po tipu i oblasti": query_1_resolution_by_type_area,
     "Q2 - Zanemarene community areas": query_2_neglected_areas,
-    "Q3 - Sezonski obrasci": query_3_seasonal_patterns,
+    "Q3 - Hotspot lokacije": query_3_hotspot_locations,
     "Q4 - Problematični blokovi": query_4_problem_blocks,
-    "Q5 - Efikasnost po distriktu": query_5_district_efficiency,
+    "Q5 - Najcesci tip po oblasti": query_5_top_types_per_area,
     "Q6 - Glodari po community area": query_6_rodent_community,
     "Q7 - Napuštena vozila (30+ dana)": query_7_abandoned_vehicles,
     "Q8 - Sezonski obrazac glodara": query_8_rodent_seasonal,
